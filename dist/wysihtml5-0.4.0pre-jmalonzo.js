@@ -2972,7 +2972,7 @@ rangy.createModule("DomUtil", function(api, module) {
             if (implementsControlRange && implementsDocSelection && sel.docSelection.type == CONTROL) {
                 updateControlSelection(sel);
             } else {
-                sel._ranges.length = sel.rangeCount = sel.nativeSelection.rangeCount;
+                sel._ranges.length = sel.rangeCount = sel.nativeSelection ? sel.nativeSelection.rangeCount : null;
                 if (sel.rangeCount) {
                     for (var i = 0, len = sel.rangeCount; i < len; ++i) {
                         sel._ranges[i] = new api.WrappedRange(sel.nativeSelection.getRangeAt(i));
@@ -4654,7 +4654,9 @@ wysihtml5.dom.insert = function(elementToInsert) {
     }
   };
 };wysihtml5.dom.insertCSS = function(rules) {
-  rules = rules.join("\n");
+  if (Object.prototype.toString.call(rules) === '[object Array]') {
+    rules = rules.join("\n");
+  }
   
   return {
     into: function(doc) {
@@ -4679,7 +4681,8 @@ wysihtml5.dom.insert = function(elementToInsert) {
       }
     }
   };
-};/**
+};
+/**
  * Method to set dom events
  *
  * @example
@@ -4943,6 +4946,7 @@ wysihtml5.dom.parse = (function() {
     var attributes          = {},                         // fresh new set of attributes to set on newNode
         setClass            = rule.set_class,             // classes to set
         addClass            = rule.add_class,             // add classes based on existing attributes
+        allowAttributes     = rule.allow_attributes,      // copy attributes from old to new node
         setAttributes       = rule.set_attributes,        // attributes to set on the current node
         checkAttributes     = rule.check_attributes,      // check/convert values of attributes
         allowedClasses      = currentRules.classes,
@@ -4961,6 +4965,17 @@ wysihtml5.dom.parse = (function() {
     
     if (setAttributes) {
       attributes = wysihtml5.lang.object(setAttributes).clone();
+    }
+
+    if (allowAttributes) {
+      allowAttributesLength = allowAttributes.length;
+      for (i = 0; i<allowAttributesLength; i++) {
+        attributeName = allowAttributes[i];
+        newAttributeValue = _getAttribute(oldNode, attributeName);
+        if (typeof(newAttributeValue) === "string") {
+          attributes[attributeName] = newAttributeValue;
+        }
+      }
     }
     
     if (checkAttributes) {
@@ -5002,7 +5017,7 @@ wysihtml5.dom.parse = (function() {
       classes = classes.concat(oldClasses.split(WHITE_SPACE_REG_EXP));
     }
     classesLength = classes.length;
-    for (; i<classesLength; i++) {
+    for (i = 0; i<classesLength; i++) {
       currentClass = classes[i];
       if (allowedClasses[currentClass]) {
         newClasses.push(currentClass);
@@ -5154,6 +5169,13 @@ wysihtml5.dom.parse = (function() {
       return function(attributeValue) {
         attributeValue = (attributeValue || "").replace(REG_EXP, "");
         return attributeValue || null;
+      };
+    })(),
+
+    style: (function() {
+      var REG_EXP = /[^a-z0-9_\-]\:[^a-z0-9_\-];/gi;
+      return function(attributeValue) {
+        return attributeValue;
       };
     })()
   };
@@ -5589,7 +5611,12 @@ wysihtml5.dom.replaceWithChildNodes = function(node) {
       this.loaded = true;
 
       // Trigger the callback
-      setTimeout(function() { that.callback(that); }, 0);
+      setTimeout(function() {
+        // Don't continue if iframe is not attached to the DOM by the time
+        // this callback function is called.
+        if (!iframe.contentWindow) { return;}
+        that.callback(that);
+      }, 0);
     },
 
     _getHtml: function(templateVars) {
@@ -6068,9 +6095,12 @@ wysihtml5.quirks.ensureProperClearing = (function() {
       }
 
       // Remove it again, just to make sure that the placeholder is definitely out of the dom tree
-      try {
-        caretPlaceholder.parentNode.removeChild(caretPlaceholder);
-      } catch(e2) {}
+      // FIX this upstream - no check means FF 16.0.2 will throw an exception/error
+      if (caretPlaceholder && caretPlaceholder.parentNode) {
+        try {
+          caretPlaceholder.parentNode.removeChild(caretPlaceholder);
+        } catch(e2) {}
+      }
     },
 
     /**
@@ -8268,7 +8298,12 @@ wysihtml5.views.View = Base.extend(
 
       
       dom.observe(this.doc, "keydown", function(event) {
-        var keyCode = event.keyCode;
+        var keyCode       = event.keyCode,
+            blockElement  = dom.getParentElement(that.selection.getSelectedNode(), { nodeName: USE_NATIVE_LINE_BREAK_INSIDE_TAGS }, 4);
+
+        if (!blockElement && !that.config.useLineBreaks && keyCode === wysihtml5.ENTER_KEY) {
+          that.commands.exec("formatBlock", "p");
+        }
         
         if (event.shiftKey) {
           return;
@@ -8278,7 +8313,6 @@ wysihtml5.views.View = Base.extend(
           return;
         }
         
-        var blockElement = dom.getParentElement(that.selection.getSelectedNode(), { nodeName: USE_NATIVE_LINE_BREAK_INSIDE_TAGS }, 4);
         if (blockElement) {
           setTimeout(function() {
             // Unwrap paragraph after leaving a list or a H1-6
@@ -8301,10 +8335,7 @@ wysihtml5.views.View = Base.extend(
               adjust(selectedNode);
             }
           }, 0);
-          return;
-        }
-        
-        if (that.config.useLineBreaks && keyCode === wysihtml5.ENTER_KEY && !wysihtml5.browser.insertsLineBreaksOnReturn()) {
+        } else if (that.config.useLineBreaks && keyCode === wysihtml5.ENTER_KEY && !wysihtml5.browser.insertsLineBreaksOnReturn()) {
           that.commands.exec("insertLineBreak");
           event.preventDefault();
         }
@@ -8349,7 +8380,7 @@ wysihtml5.views.View = Base.extend(
         "-webkit-border-bottom-right-radius", "-moz-border-radius-bottomright", "border-bottom-right-radius",
         "-webkit-border-bottom-left-radius", "-moz-border-radius-bottomleft", "border-bottom-left-radius",
         "-webkit-border-top-left-radius", "-moz-border-radius-topleft", "border-top-left-radius",
-        "width", "height"
+        "width", "height", "overflow-y", "overflow-x"
       ],
       ADDITIONAL_CSS_RULES = [
         "html                 { height: 100%; }",
@@ -8511,7 +8542,8 @@ wysihtml5.views.View = Base.extend(
     
     return this;
   };
-})(wysihtml5);/**
+})(wysihtml5);
+/**
  * Taking care of events
  *  - Simulating 'change' event on contentEditable element
  *  - Handling drag & drop logic
@@ -8581,7 +8613,7 @@ wysihtml5.views.View = Base.extend(
     });
 
     // --------- neword event ---------
-    dom.observe(element, "keyup", function(event) {
+    dom.observe(element, "keydown", function(event) {
       var keyCode = event.keyCode;
       if (keyCode === wysihtml5.SPACE_KEY || keyCode === wysihtml5.ENTER_KEY) {
         that.parent.fire("newword:composer");
